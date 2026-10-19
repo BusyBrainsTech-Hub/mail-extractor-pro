@@ -32,3 +32,4 @@ Then open:
 This version extracts email addresses from uploaded local files. It does not crawl websites automatically.
 
 Developed by BusyBrains Tech-Hub.
+# mail-extractor-pro
