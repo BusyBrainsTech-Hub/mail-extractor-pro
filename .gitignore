@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+data/*
+exports/*
+logs/*
+sample.txt
+persistence-test.txt
+persistence-check.txt
+*.db
+*.sqlite
+*.sqlite3
