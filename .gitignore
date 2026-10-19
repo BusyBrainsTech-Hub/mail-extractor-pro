@@ -3,12 +3,32 @@ __pycache__/
 .venv/
 venv/
 .env
+.env.*
+!.env.example
 data/*
 exports/*
 logs/*
-sample.txt
-persistence-test.txt
-persistence-check.txt
 *.db
 *.sqlite
 *.sqlite3
+*.backup
+sample.txt
+persistence-test.txt
+persistence-check.txt
+
+# Local backups
+*.bak
+*.backup
+*.backup-*
+*.broken-backup
+*.working-backup
+
+# Local data and exports
+data/*
+exports/*
+logs/*
+*.db
+*.sqlite
+*.sqlite3
+.env
+.env.*

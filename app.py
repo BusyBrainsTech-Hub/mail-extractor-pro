@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from email.utils import parseaddr
+from website_scanner import inspect_website
 
 BASE_DIR = Path.home() / "mail-extractor"
 DATA_DIR = BASE_DIR / "data"
@@ -135,6 +136,25 @@ footer{border-top:1px solid var(--line);padding:22px;text-align:center;color:var
   </section>
 
   <section class="panel">
+    <h2>02 / Inspect an authorized website</h2>
+    <p class="hint">
+      Inspect a website you own or are authorized to audit. The scanner
+      respects robots.txt and limits the number of pages inspected.
+    </p>
+    <form id="websiteForm">
+      <label for="websiteUrl">Website URL</label>
+      <input id="websiteUrl" type="text"
+        placeholder="https://your-own-website.example" required>
+      <label for="websitePages">Maximum pages</label>
+      <select id="websitePages">
+        <option value="1">1 page</option>
+        <option value="3">3 pages</option>
+        <option value="5" selected>5 pages</option>
+        <option value="10">10 pages</option>
+      </select>
+      <button type="submit">Inspect Website</button>
+    </form>
+    <div id="websiteStatus" aria-live="polite"></div>
     <h2>02 / Search and filter</h2>
     <div class="row">
       <div style="flex:2;min-width:200px">
@@ -237,6 +257,28 @@ $('uploadForm').addEventListener('submit', async event => {
     await refreshResults();
   } catch (error) {
     $('uploadStatus').textContent = 'Upload failed: ' + error.message;
+  }
+});
+
+
+$('websiteForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const url = $('websiteUrl').value.trim();
+  const maxPages = Number($('websitePages').value);
+  const status = $('websiteStatus');
+
+  status.textContent = 'Inspecting the authorized website… Please wait.';
+  try {
+    const response = await fetch('/api/scan-website', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url, max_pages: maxPages})
+    });
+    const data = await response.json();
+    status.textContent = data.message || data.error || 'Scan finished.';
+    await refreshResults();
+  } catch (error) {
+    status.textContent = 'Scan request failed: ' + error.message;
   }
 });
 
@@ -413,6 +455,94 @@ class Handler(BaseHTTPRequestHandler):
             conn.commit()
             conn.close()
             self.send_json(200, {"message": "Saved extraction records cleared."})
+            return
+
+ 
+        if parsed.path == "/api/scan-website":
+            if not self.client_address[0] in ("127.0.0.1", "::1"):
+                self.send_json(403, {"error": "This feature is available only locally."})
+                return
+
+            content_type = self.headers.get("Content-Type", "").lower()
+            if not content_type.startswith("application/json"):
+                self.send_json(400, {"error": "Expected a JSON request."})
+                return
+
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                length = 0
+
+            if length <= 0 or length > 4096:
+                self.send_json(413, {"error": "Invalid request size."})
+                return
+
+            try:
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                url = str(payload.get("url", "")).strip()
+                max_pages = int(payload.get("max_pages", 5))
+
+                if not url or len(url) > 2048:
+                    self.send_json(400, {"error": "Enter a valid website URL."})
+                    return
+
+                if max_pages not in (1, 3, 5, 10):
+                    self.send_json(400, {"error": "Choose 1, 3, 5, or 10 pages."})
+                    return
+
+                # Normalize the URL for stable database source attribution.
+                if "://" not in url:
+                    url = "https://" + url
+
+                parsed_url = urlparse(url)
+                if not parsed_url.hostname:
+                    self.send_json(400, {"error": "Enter a valid website URL."})
+                    return
+
+                result = inspect_website(url, max_pages=max_pages)
+                raw_emails = result.get("emails", [])
+
+                # Accept scanner output as strings or records containing an email.
+                if isinstance(raw_emails, dict):
+                    candidates = list(raw_emails.keys())
+                elif isinstance(raw_emails, list):
+                    candidates = raw_emails
+                else:
+                    candidates = []
+
+                addresses = set()
+                for item in candidates:
+                    if isinstance(item, str):
+                        candidate = item
+                    elif isinstance(item, dict):
+                        candidate = str(item.get("email", ""))
+                    elif isinstance(item, (tuple, list)) and item:
+                        candidate = str(item[0])
+                    else:
+                        continue
+
+                    addresses.update(extract_emails(candidate))
+
+                source_name = "website:" + parsed_url.hostname.lower()
+                added = save_emails(source_name, sorted(addresses)) if addresses else 0
+                notes = result.get("notes", [])
+
+                self.send_json(200, {
+                    "message": (
+                        f"Scan complete: {result.get('pages_scanned', 0)} page(s) inspected; "
+                        f"{len(addresses)} address(es) found; {added} new record(s) saved."
+                    ),
+                    "pages_scanned": result.get("pages_scanned", 0),
+                    "emails_found": len(addresses),
+                    "records_added": added,
+                    "notes": notes
+                })
+            except ValueError as exc:
+                self.send_json(400, {"error": str(exc)})
+            except Exception:
+                self.send_json(502, {
+                    "error": "The website scan could not be completed. Check the URL and server log."
+                })
             return
 
         if parsed.path != "/api/extract":
